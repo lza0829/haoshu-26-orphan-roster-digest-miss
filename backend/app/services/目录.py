@@ -1,5 +1,6 @@
 from app.db import 连接
 from app.modules.贯验孤儿卫星 import 扫描孤儿
+from app.modules import 孤儿扫覆盖戳 as 孤戳
 
 
 def 总览() -> dict:
@@ -9,7 +10,8 @@ def 总览() -> dict:
             return conn.execute(sql).fetchone()["c"]
 
         末 = conn.execute("SELECT * FROM 金库贯验 ORDER BY 编号 DESC LIMIT 1").fetchone()
-        孤儿 = 扫描孤儿(conn)
+        覆盖范围 = 孤戳.读覆盖站规(conn)
+        孤儿 = 扫描孤儿(conn, None, 覆盖范围)
         return {
             "号卡枢纽": c("SELECT COUNT(*) AS c FROM 枢纽_号卡"),
             "套餐枢纽": c("SELECT COUNT(*) AS c FROM 枢纽_套餐"),

@@ -5,6 +5,8 @@ const 夹具 = [
   ["孤儿-当前", "造当前孤儿", "删除当前卫星的父枢纽——两架构均须贯验失败"],
   ["孤儿-历史", "造仅历史孤儿", "只剩历史非当前孤儿——乙口径必须失败（甲口径会放行）"],
   ["孤儿-失败后开版", "失败后开版自检", "贯验失败后对同死父键开新当前——须拒绝且零增量"],
+  ["孤儿-覆盖戳分叉", "覆盖戳分叉回归", "灌历史孤儿→切仅当前贯验→切当前+历史重跑：架构「规」必须扫出历史孤儿"],
+  ["孤儿-清扫写闸", "清扫写闸自检", "无戳拒、分叉拒、互证后放行；半截处置整票回滚"],
 ];
 
 export default function 贯验(){
@@ -14,6 +16,7 @@ export default function 贯验(){
   const [忙,设忙]=useState(false);
   const [夹,设夹]=useState(null);
   const [夹忙,设夹忙]=useState("");
+  const [戳,设戳]=useState(null);
 
   const 刷=async(回填末=true)=>{
     const [列,孤报]=await Promise.all([取("/贯验"),取("/孤儿")]);
@@ -31,8 +34,7 @@ export default function 贯验(){
       范围口径:列[0].范围口径||"当前+历史",
       检项:null,
     });
-    return {列,孤报};
-  };
+    return {列,孤报};  };
   useEffect(()=>{刷();},[]);
 
   const 跑=async()=>{
@@ -49,6 +51,7 @@ export default function 贯验(){
         开版闸:r.开版闸,
         明细:r.孤儿明细,
       });
+      设戳({跑次号:r.跑次号, 站规版本:r.站规版本, 覆盖戳:r.覆盖戳});
       await 刷(false);
     } finally { 设忙(false); }
   };
@@ -68,7 +71,7 @@ export default function 贯验(){
 
   return (<div>
     <h1 className="题">贯验</h1>
-    <p className="述">沿枢纽 → 链接 → 卫星贯穿互证。孤儿口径：<b>乙 · 当前+历史链</b>——同父下任一卫星行（含历史非当前）父不可解即孤儿，仅历史孤儿同样判失败。</p>
+    <p className="述">沿枢纽 → 链接 → 卫星贯穿互证。本跑次扫描范围以现行站规为准：<b>{孤?.范围口径||"当前+历史"}</b>{孤?.戳核证 && !孤.戳核证.通过 ? "（末次覆盖戳与站规分叉，禁止沿用旧结论，须重跑钉新戳）" : "——每次贯验新开跑次，结论与覆盖戳同事务同成败"}。</p>
     <div className="行">
       <button onClick={跑} disabled={忙}>{忙?"贯验中…":"跑贯验"}</button>
       <button className="次" onClick={刷}>刷新</button>
@@ -92,6 +95,21 @@ export default function 贯验(){
           <div className="卡"><b>{末.历史孤儿数??孤?.历史孤儿数??0}</b><span>历史孤儿</span></div>
         </div>
       </div>
+
+      {戳?.覆盖戳 && (
+        <div className="段">
+          <div className="段题">本跑次覆盖戳 · 与结论同事务同成败</div>
+          <div className={`闸条 ${末.是否通过?"通":"败"}`}>
+            <div className="闸标">
+              {戳.跑次号} · 范围 {戳.覆盖戳.覆盖范围} · 站规版本 {戳.站规版本}
+            </div>
+            <div className="闸说">{戳.覆盖戳.摘要}</div>
+            <div className="讯" style={{margin:0}}>
+              孤儿 {戳.覆盖戳.孤儿件数}（当前 {戳.覆盖戳.当前孤儿数} / 历史 {戳.覆盖戳.历史孤儿数}）· 死父键 {戳.覆盖戳.死父键数}
+            </div>
+          </div>
+        </div>
+      )}
 
       {末.检项?.length>0 && (
         <div className="段">
@@ -135,7 +153,7 @@ export default function 贯验(){
     </div>
 
     <div className="段">
-      <div className="段题">孤儿卫星 · 当前+历史明细</div>
+      <div className="段题">孤儿卫星 · 覆盖{孤?.范围口径||"当前+历史"}明细</div>
       {!孤儿.length ? <div className="空态">无孤儿：全部卫星父键可解，开版闸通行。</div> : (
         <table>
           <thead>
@@ -177,6 +195,10 @@ export default function 贯验(){
             <span className="批">{夹.场景}</span>
             <span className="日">{夹.说明}</span>
             <span className="徽章 淡">口径 {夹.范围口径}</span>
+            <span className={`徽章 ${夹.戳核证?.通过?"通":"败"}`}>
+              戳核证 {夹.戳核证?.有戳 ? (夹.戳核证.通过?"通过":"分叉禁沿用") : "无戳"}
+            </span>
+            <span className="徽章 淡">{夹.站规版本||""}</span>
             <span className={`徽章 ${夹.末次贯验?.是否通过?"通":"败"}`}>
               末次贯验 {夹.末次贯验?.是否通过?"通过":"失败"}
             </span>
@@ -207,7 +229,7 @@ export default function 贯验(){
         <table>
           <thead>
             <tr>
-              <th>编号</th><th>时刻</th><th>枢纽</th><th>链接</th>
+              <th>编号</th><th>跑次</th><th>时刻</th><th>枢纽</th><th>链接</th>
               <th>卫星当前</th><th>口径</th><th>孤儿</th><th>当前</th><th>历史</th>
               <th>结果</th><th>说明</th>
             </tr>
@@ -216,6 +238,7 @@ export default function 贯验(){
             {史.map(r=>(
               <tr key={r.编号}>
                 <td>{r.编号}</td>
+                <td>{r.跑次号||"—"}</td>
                 <td>{r.时刻}</td>
                 <td>{r.枢纽数}</td>
                 <td>{r.链接数}</td>

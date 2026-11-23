@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.db import 夹具目录, 连接
-from app.services import 装载, 贯验, 目录, 孤儿, 夹具
+from app.services import 装载, 贯验, 目录, 孤儿, 夹具, 站规, 清扫
 
 路由 = APIRouter(prefix="/api")
 
@@ -106,10 +106,27 @@ def 列卫星(lei: str, 仅当前: int = 1):
 
 
 @路由.get("/站规")
-def 站规():
+def 列站规():
+    return 站规.列站规()
+
+
+class 站规覆盖请求(BaseModel):
+    覆盖范围: str
+
+
+@路由.post("/站规/孤儿覆盖")
+def 改孤儿覆盖(体: 站规覆盖请求):
+    """站规覆盖变更：仅允许 仅当前 / 当前+历史；变更即开新版本，旧覆盖戳即刻分叉。"""
+    return 站规.改孤儿覆盖(体.覆盖范围)
+
+
+@路由.get("/站规/版本")
+def 站规版本履历():
     conn = 连接()
     try:
-        return {r["键"]: r["值"] for r in conn.execute("SELECT 键, 值 FROM 站规")}
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM 站规版本 ORDER BY 版本号 DESC LIMIT 50"
+        )]
     finally:
         conn.close()
 
@@ -176,7 +193,11 @@ def 做贯验():
 def 列贯验():
     conn = 连接()
     try:
-        return [dict(r) for r in conn.execute("SELECT * FROM 金库贯验 ORDER BY 编号 DESC LIMIT 20")]
+        return [dict(r) for r in conn.execute(
+            "SELECT g.*, s.跑次号, s.站规版本 AS 覆盖戳站规版本 "
+            "FROM 金库贯验 g LEFT JOIN 孤儿扫覆盖戳 s ON s.贯验编号=g.编号 "
+            "ORDER BY g.编号 DESC LIMIT 20"
+        )]
     finally:
         conn.close()
 
@@ -215,11 +236,37 @@ from app.modules import 孤儿扫覆盖戳 as 孤戳
 
 @路由.get("/贯验/孤儿覆盖戳")
 def 取孤儿覆盖戳():
+    """覆盖戳履历只读视图：末次戳附与现行站规的实时核证结论。"""
     conn = 连接()
     try:
         return 孤戳.查戳(conn)
     finally:
         conn.close()
+
+
+@路由.get("/贯验/孤儿覆盖戳/核证")
+def 核证孤儿覆盖戳(戳编号: int | None = None, 跑次号: str | None = None):
+    """孤儿覆盖戳核证只读接口（基线所无）。
+
+    架构「规」：戳范围/站规版本与现行站规分叉即核证失败、禁止沿用旧结论；
+    无戳同样判不可采信，写闸据此拒绝。
+    """
+    conn = 连接()
+    try:
+        return 孤戳.核证(conn, 戳编号, 跑次号)
+    finally:
+        conn.close()
+
+
+@路由.post("/孤儿/清扫")
+def 清扫孤儿():
+    """孤儿清扫写闸：无戳/戳分叉/戳实不符一律拒绝；处置与戳同事务同成败。"""
+    return 清扫.清扫孤儿()
+
+
+@路由.get("/孤儿/处置")
+def 列孤儿处置():
+    return 清扫.列处置()
 
 def _alias_payload(payload: dict) -> dict:
     out = dict(payload or {})

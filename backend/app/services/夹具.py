@@ -4,9 +4,10 @@ import json
 import uuid
 
 from app.db import 夹具目录, 连接
-from app.modules.贯验孤儿卫星 import 规则口径, 扫描孤儿, 闸状态
+from app.modules.贯验孤儿卫星 import 扫描孤儿, 闸状态
+from app.modules import 孤儿扫覆盖戳 as 孤戳
 from app.seed import 哈希键
-from app.services import 贯验, 装载
+from app.services import 贯验, 装载, 站规, 清扫
 
 卫星表名 = ("卫星_号卡属性", "卫星_套餐属性", "卫星_客户属性", "卫星_订购属性")
 
@@ -61,6 +62,10 @@ def 跑场景(名: str, 体: dict | None = None) -> dict:
             elif 动作 == "跑贯验":
                 回.update(贯验.跑贯验())
                 回["结果"] = "通过" if 回.get("是否通过") else "失败"
+            elif 动作 == "改孤儿覆盖":
+                回.update(站规.改孤儿覆盖(步.get("覆盖范围") or "", "夹具场景"))
+            elif 动作 == "清扫孤儿":
+                回.update(清扫.清扫孤儿())
             elif 动作 == "试开版":
                 父哈希 = 步.get("父哈希") or ""
                 父业务键 = 步.get("父业务键")
@@ -88,18 +93,24 @@ def 跑场景(名: str, 体: dict | None = None) -> dict:
     conn = 连接()
     try:
         后 = _卫星总数(conn)
-        孤儿 = 扫描孤儿(conn)
-        闸 = 闸状态(conn)
+        覆盖范围 = 孤戳.读覆盖站规(conn)
+        孤儿 = 扫描孤儿(conn, None, 覆盖范围)
+        闸 = 闸状态(conn, 覆盖范围)
         末 = conn.execute(
             "SELECT * FROM 金库贯验 ORDER BY 编号 DESC LIMIT 1"
         ).fetchone()
+        证 = 孤戳.核证(conn)
+        末次戳 = 孤戳.末次戳(conn)
     finally:
         conn.close()
 
     return {
         "场景": 场景.get("场景") or 名,
         "说明": 场景.get("说明") or "",
-        "范围口径": 规则口径,
+        "范围口径": 覆盖范围,
+        "站规版本": 证["现行站规版本"],
+        "戳核证": {"通过": 证["核证通过"], "分叉": 证["分叉"], "有戳": 证["有戳"]},
+        "末次覆盖戳": 末次戳,
         "步骤": 结果步,
         "卫星增量": 后 - 前,
         "末次贯验": dict(末) if 末 else None,

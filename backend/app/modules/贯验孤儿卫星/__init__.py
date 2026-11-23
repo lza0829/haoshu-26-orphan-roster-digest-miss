@@ -6,6 +6,17 @@ import sqlite3
 架构代号 = "乙"
 口径说明 = "同父下任一卫星行（含历史非当前）父不可解即孤儿；仅历史孤儿批次同样判失败"
 
+范围仅当前 = "仅当前"
+范围当前加历史 = "当前+历史"
+合法范围 = (范围仅当前, 范围当前加历史)
+
+
+def 核范围(覆盖范围: str) -> str:
+    """站规只允许两种覆盖口径，非法值直接拒——禁止脏站规静默收窄扫描。"""
+    if 覆盖范围 not in 合法范围:
+        raise ValueError(f"非法孤儿覆盖口径:{覆盖范围}；仅支持 {合法范围}")
+    return 覆盖范围
+
 卫星映射 = (
     {"卫星类": "号卡", "卫星表": "卫星_号卡属性", "父列": "号卡哈希", "父表": "枢纽_号卡", "父类": "号卡"},
     {"卫星类": "套餐", "卫星表": "卫星_套餐属性", "父列": "套餐哈希", "父表": "枢纽_套餐", "父类": "套餐"},
@@ -32,20 +43,30 @@ def 父可解(conn: sqlite3.Connection, 父表: str, 父哈希: str) -> bool:
     )
 
 
-def 扫描全部(conn: sqlite3.Connection, 卫星类: str | None = None) -> list[dict]:
-    """巡检全部卫星行（含历史非当前），逐行给出父可解 valid。"""
+def 扫描全部(
+    conn: sqlite3.Connection,
+    卫星类: str | None = None,
+    覆盖范围: str = 范围当前加历史,
+) -> list[dict]:
+    """巡检卫星行，逐行给出父可解 valid。
+
+    - 覆盖范围=当前+历史：全部行（当前 + 历史非当前）；
+    - 覆盖范围=仅当前：只扫是否当前=1 的行，历史行不在本次覆盖内。
+    """
+    核范围(覆盖范围)
     行: list[dict] = []
     for m in 卫星映射:
         if 卫星类 and 卫星类 != m["卫星类"]:
             continue
+        过滤 = "" if 覆盖范围 == 范围当前加历史 else " WHERE 是否当前=1"
         for r in conn.execute(
             f"SELECT 编号, {m['父列']} AS 父哈希, 是否当前, 装载日, 载荷哈希, 属性 "
-            f"FROM {m['卫星表']} ORDER BY 编号 DESC"
+            f"FROM {m['卫星表']}{过滤} ORDER BY 编号 DESC"
         ):
             可解 = 父可解(conn, m["父表"], r["父哈希"])
             行.append(
                 {
-                    "范围口径": 规则口径,
+                    "范围口径": 覆盖范围,
                     "卫星类": m["卫星类"],
                     "卫星表": m["卫星表"],
                     "卫星编号": r["编号"],
@@ -62,9 +83,13 @@ def 扫描全部(conn: sqlite3.Connection, 卫星类: str | None = None) -> list
     return 行
 
 
-def 扫描孤儿(conn: sqlite3.Connection, 卫星类: str | None = None) -> list[dict]:
-    """乙口径孤儿扫描：当前 + 历史链，任一父不可解即入明细。"""
-    return [r for r in 扫描全部(conn, 卫星类) if r["是否孤儿"]]
+def 扫描孤儿(
+    conn: sqlite3.Connection,
+    卫星类: str | None = None,
+    覆盖范围: str = 范围当前加历史,
+) -> list[dict]:
+    """按给定覆盖范围扫孤儿；默认乙口径当前 + 历史链，任一父不可解即入明细。"""
+    return [r for r in 扫描全部(conn, 卫星类, 覆盖范围) if r["是否孤儿"]]
 
 
 def 死父键(孤儿明细: list[dict]) -> list[dict]:
@@ -116,9 +141,10 @@ def _末次贯验死父(conn: sqlite3.Connection) -> list[dict]:
     return sorted(组.values(), key=lambda x: (x["父表"], x["父哈希"]))
 
 
-def 闸状态(conn: sqlite3.Connection) -> dict:
+def 闸状态(conn: sqlite3.Connection, 覆盖范围: str = 范围当前加历史) -> dict:
     """开版闸只读状态：实时孤儿 + 末次贯验落盘死父键，二者任一即失败闭。"""
-    孤儿 = 扫描孤儿(conn)
+    核范围(覆盖范围)
+    孤儿 = 扫描孤儿(conn, None, 覆盖范围)
     实时 = 死父键(孤儿)
     落盘 = _末次贯验死父(conn)
     return {
@@ -143,7 +169,14 @@ def 开版闸(conn: sqlite3.Connection, 卫星表: str, 父哈希: str) -> tuple
     3. 末次贯验若失败，且已把该父键作为死父键落盘，则须先重新贯验通过——
        避免同批重建枢纽后绕过闸口开出新当前。
     闸口与贯验共用 BEGIN IMMEDIATE 串行，不会出现半截新当前。
+    另串联覆盖戳互证：戳与现行站规分叉时禁止沿用旧结论开版（架构「规」）。
     """
+    # 覆盖戳互证放在最前：站规已变更而旧结论未重钉时，任何开版一律先拦
+    from app.modules.孤儿扫覆盖戳 import 开版闸戳互证
+
+    戳放行, 戳因 = 开版闸戳互证(conn)
+    if not 戳放行:
+        return False, 戳因
     m = 取映射(卫星表=卫星表)
     if not m:
         return False, f"未知卫星表:{卫星表}"
